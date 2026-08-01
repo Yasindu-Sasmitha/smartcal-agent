@@ -136,8 +136,7 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
     st.caption(
-        "Tip: deploy to [share.streamlit.io](https://share.streamlit.io) "
-        "for free hosting."
+        "Created By : Yasindu Sasmitha"
     )
 
 # --------------------------------------------------------------------------- #
