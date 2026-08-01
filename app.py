@@ -117,7 +117,7 @@ with st.sidebar:
     suggestions = [
         "What is the square root of the population of Tokyo in 2024?",
         "Convert 15.7 parsecs to light-years, then to Proxima Centauri distances.",
-        "Who is older: the US President or the UK Prime Minister?",
+        "Write a script to simulate tossing two fair six-sided dice 10,000 times. Calculate the experimental probability of rolling a sum of 7 or 11, and compare it to the theoretical probability.",
         "Compute 125 * 37 + cos(0).",
         "Write a haiku about recursion.",
     ]
