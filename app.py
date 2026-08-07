@@ -29,34 +29,7 @@ st.set_page_config(
 CUSTOM_CSS = """
 <style>
   .stApp header { background: transparent; }
-  .block-container { padding-top: 2rem; padding-bottom: 14rem; max-width: 820px; }
-
-  /* Pin the chat composer (file uploader + text input + Send) to the bottom
-     of the viewport so it stays visible while the conversation scrolls. */
-  .chat-input-pinned {
-      position: fixed;
-      left: 50%;
-      bottom: 0;
-      transform: translateX(-50%);
-      width: 100%;
-      max-width: 820px;
-      z-index: 999;
-      padding: 0.5rem 1rem 1rem 1rem;
-      background: #0f172a;
-      border-top: 1px solid #1e293b;
-      box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.25);
-  }
-  /* Cap the pinned form's height so an expanded file uploader doesn't push
-     the Send button off-screen; the form scrolls internally instead. */
-  .chat-input-pinned [data-testid="stForm"] {
-      max-height: 50vh;
-      overflow-y: auto;
-  }
-  /* Light-theme override — Streamlit stamps data-theme="light" on <html>. */
-  html[data-theme="light"] .chat-input-pinned {
-      background: #ffffff;
-      border-top: 1px solid #e2e8f0;
-  }
+  .block-container { padding-top: 2rem; max-width: 820px; }
 
   .cal-badge {
       display: inline-block;
@@ -343,7 +316,6 @@ for role, content in st.session_state.messages:
 # input + send button. The text input reads its initial value from
 # `st.session_state["chat_text_input"]`, which the sidebar suggestions populate.
 
-st.markdown('<div class="chat-input-pinned">', unsafe_allow_html=True)
 with st.form("chat_form", clear_on_submit=True):
     uploaded = st.file_uploader(
         "Attach images (optional)",
@@ -359,7 +331,6 @@ with st.form("chat_form", clear_on_submit=True):
         placeholder="Ask anything…  (drop images above to attach)",
     )
     submitted = st.form_submit_button("Send", use_container_width=True)
-st.markdown('</div>', unsafe_allow_html=True)
 
 if submitted and (text or uploaded):
     images = [f.getvalue() for f in uploaded] if uploaded else []
