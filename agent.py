@@ -7,7 +7,9 @@ For the Streamlit web UI, see `app.py`.
 
 from __future__ import annotations
 
+import io
 import os
+from pathlib import Path
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -18,7 +20,7 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from core import run_agent_stream_dispatch
+from core import _detect_mime, run_agent_stream_dispatch
 
 console = Console()
 
@@ -167,9 +169,53 @@ def _handle(event: dict) -> None:
         )
 
 
-def run_agent(user_message: str, use_afc: bool = False) -> None:
+def _render_attached_images(images: list[bytes]) -> None:
+    """Render each attached image as a small panel before the agent responds.
+
+    Uses `rich.pil.Image` for terminal rendering (SIXEL / iTerm / Kitty, depends
+    on the terminal). If Pillow isn't installed, fall back to a text note with
+    sizes — the prompt still works either way."""
+    try:
+        from rich.pil import Image as PilImage  # Pillow-backed widget
+    except ImportError:
+        sizes = ", ".join(f"{len(b) // 1024} KiB" for b in images)
+        console.print(
+            Panel(
+                f"[dim]{len(images)} attached image(s) ({sizes}). "
+                f"Install Pillow to render thumbnails in the terminal.[/dim]",
+                title="📎 [bold]attached[/bold]",
+                border_style="cyan",
+            )
+        )
+        return
+    for img_bytes in images:
+        try:
+            console.print(
+                Panel(
+                    PilImage.from_bytes(io.BytesIO(img_bytes), width=40),
+                    border_style="cyan",
+                    title="📎 [bold]attached[/bold]",
+                )
+            )
+        except Exception as exc:
+            console.print(
+                Panel(
+                    f"[red]Could not render image: {exc}[/red]",
+                    title="📎 [bold red]attached (error)[/bold red]",
+                    border_style="red",
+                )
+            )
+
+
+def run_agent(
+    user_message: str, use_afc: bool = False, images: list[bytes] | None = None
+) -> None:
+    if images:
+        _render_attached_images(images)
     with console.status("[bold cyan]Thinking…[/bold cyan]", spinner="dots") as status:
-        for event in run_agent_stream_dispatch(user_message, use_afc=use_afc):
+        for event in run_agent_stream_dispatch(
+            user_message, use_afc=use_afc, images=images
+        ):
             if event["type"] == "status":
                 status.update(f"[bold cyan]{event['text']}[/bold cyan]")
                 continue
@@ -187,9 +233,13 @@ def main() -> None:
     console.print(BANNER)
     mode = "[bold magenta]automatic function calling[/bold magenta]" if use_afc else "[dim]manual tool dispatch[/dim]"
     console.print(
-        f"[dim]Type a question and press Enter. Type "
-        f"[bold]exit[/bold] or [bold]quit[/bold] to leave. Mode: {mode}[/dim]\n"
+        f"[dim]Type a question and press Enter. Use [bold]/attach <path>[/bold] "
+        f"to add an image to your next prompt. Type [bold]exit[/bold] or "
+        f"[bold]quit[/bold] to leave. Mode: {mode}[/dim]\n"
     )
+
+    pending_images: list[bytes] = []
+
     while True:
         try:
             user_input = Prompt.ask("[bold green]You[/bold green]").strip()
@@ -201,7 +251,32 @@ def main() -> None:
             return
         if not user_input:
             continue
-        run_agent(user_input, use_afc=use_afc)
+
+        # Slash commands.
+        if user_input.startswith("/attach"):
+            path_str = user_input[len("/attach"):].strip()
+            if not path_str:
+                console.print("[red]Usage: /attach <path-to-image>[/red]")
+                continue
+            try:
+                data = Path(path_str).read_bytes()
+                _detect_mime(data)  # raises ValueError for unsupported formats
+                pending_images.append(data)
+                console.print(
+                    f"[green]Attached {path_str} "
+                    f"({len(data) // 1024} KiB). It will be sent with your "
+                    f"next prompt.[/green]"
+                )
+            except FileNotFoundError:
+                console.print(f"[red]File not found: {path_str}[/red]")
+            except ValueError as exc:
+                console.print(f"[red]{exc}[/red]")
+            continue
+
+        # Consume any attached images and send.
+        images = pending_images
+        pending_images = []
+        run_agent(user_input, use_afc=use_afc, images=images)
         console.print()
 
 

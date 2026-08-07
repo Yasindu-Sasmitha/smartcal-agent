@@ -427,6 +427,46 @@ def _serialise_for_model(payload) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Multimodal helpers (image attachments)                                      #
+# --------------------------------------------------------------------------- #
+
+
+def _detect_mime(data: bytes) -> str:
+    """Sniff the image format from the first few bytes. PNG / JPEG / WEBP only.
+
+    Raising ValueError (not returning None) keeps callers honest — the Streamlit
+    file_uploader restricts extensions, so a ValueError here usually means a
+    renamed file slipped through. The error message travels back to the UI."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WEBP":
+        return "image/webp"
+    raise ValueError(
+        "Unsupported image format. Use PNG, JPEG, or WEBP."
+    )
+
+
+def _build_user_content(text: str, images: list[bytes] | None):
+    """Build the message body for a user turn.
+
+    Returns a plain string when there are no images (keeps the existing
+    fast-path simple and matches what `chats.send_message` already accepts).
+    Returns a single-element list of `types.Content` when images are present
+    so the SDK receives both text and image parts in one request."""
+    if not images:
+        return text
+    parts = []
+    if text:
+        parts.append(types.Part.from_text(text=text))
+    for img_bytes in images:
+        mime = _detect_mime(img_bytes)
+        parts.append(types.Part.from_bytes(data=img_bytes, mime_type=mime))
+    return [types.Content(role="user", parts=parts)]
+
+
+# --------------------------------------------------------------------------- #
 # Streaming agent                                                             #
 # --------------------------------------------------------------------------- #
 #
@@ -443,14 +483,16 @@ def _serialise_for_model(payload) -> str:
 # Frontends should treat `final` / `aborted` as terminal.
 
 
-def run_agent_stream(user_message: str) -> Generator[dict, None, None]:
+def run_agent_stream(
+    user_message: str, images: list[bytes] | None = None
+) -> Generator[dict, None, None]:
     chat = client.chats.create(
         model=MODEL_NAME,
         config={"tools": [{"function_declarations": TOOLS}]},
     )
 
     yield {"type": "status", "text": "Thinking..."}
-    response = chat.send_message(user_message)
+    response = chat.send_message(_build_user_content(user_message, images))
 
     for _ in range(MAX_TURNS):
         fn_calls = [
@@ -527,7 +569,9 @@ def run_agent_stream(user_message: str) -> Generator[dict, None, None]:
 # us having to reconstruct every intermediate step.
 
 
-def run_agent_stream_afc(user_message: str) -> Generator[dict, None, None]:
+def run_agent_stream_afc(
+    user_message: str, images: list[bytes] | None = None
+) -> Generator[dict, None, None]:
     """Run the agent via the SDK's automatic function calling mode.
 
     Yields the same event shapes as `run_agent_stream`, plus a single
@@ -548,7 +592,7 @@ def run_agent_stream_afc(user_message: str) -> Generator[dict, None, None]:
             ),
         ),
     )
-    response = chat.send_message(user_message)
+    response = chat.send_message(_build_user_content(user_message, images))
 
     # Extract the call history. `response.automatic_function_calling_history`
     # is a list of Content objects, each with `.parts`. Each part that
@@ -575,10 +619,16 @@ def run_agent_stream_afc(user_message: str) -> Generator[dict, None, None]:
     yield {"type": "final", "text": final_text or "_No final text response from the model._"}
 
 
-def run_agent_stream_dispatch(user_message: str, use_afc: bool = False) -> Generator[dict, None, None]:
+def run_agent_stream_dispatch(
+    user_message: str,
+    use_afc: bool = False,
+    images: list[bytes] | None = None,
+) -> Generator[dict, None, None]:
     """Dispatch to manual or AFC loop based on `use_afc`. Frontends call this
-    one entry point so the toggle lives in exactly one place here."""
+    one entry point so the toggle lives in exactly one place here. `images`
+    is forwarded to whichever path is selected; pass `None` or `[]` for
+    text-only prompts."""
     if use_afc:
-        yield from run_agent_stream_afc(user_message)
+        yield from run_agent_stream_afc(user_message, images=images)
     else:
-        yield from run_agent_stream(user_message)
+        yield from run_agent_stream(user_message, images=images)

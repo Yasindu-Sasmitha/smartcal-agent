@@ -147,8 +147,11 @@ with st.sidebar:
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Handle pending prompt from sidebar
+# Handle pending prompt from sidebar — injects into the text input via a
+# session_state key the form reads as its initial value.
 pending = st.session_state.pop("pending_prompt", None)
+if pending is not None:
+    st.session_state["chat_text_input"] = pending
 
 # --------------------------------------------------------------------------- #
 # Header                                                                      #
@@ -240,16 +243,33 @@ def _render_afc_summary(calls: list) -> str:
 
 
 def _render_message(role: str, content) -> None:
-    """Render a single stored message. `content` may be a plain string (the
-    final assistant text) or a list of structured events (user prompts have
-    strings, assistant turns carry the full event trace so we can show each
-    tool call inline)."""
+    """Render a single stored message. Three shapes are supported:
+    - `str` for assistant final text OR legacy text-only user prompts.
+    - `dict` with `{"text", "images"}` for user turns that may carry
+      attached images (images list may be empty).
+    - `list[dict]` of structured events for assistant turns (tool calls,
+      tool results, final text) — produced by `run_agent_stream_dispatch`.
+    """
     if role == "user":
         st.markdown(
             f'<span class="cal-badge user"> you</span>',
             unsafe_allow_html=True,
         )
-        st.markdown(content)
+        # Legacy text-only user message.
+        if isinstance(content, str):
+            st.markdown(content)
+            return
+        # New multimodal user message.
+        if isinstance(content, dict) and "images" in content:
+            if content.get("images"):
+                cols = st.columns(min(len(content["images"]), 4))
+                for i, img_bytes in enumerate(content["images"]):
+                    cols[i % len(cols)].image(img_bytes, width=120)
+            if content.get("text"):
+                st.markdown(content["text"])
+            return
+        # Unknown shape — fall back to a stringified display so we don't crash.
+        st.markdown(str(content))
         return
 
     st.markdown(
@@ -291,14 +311,34 @@ for role, content in st.session_state.messages:
 # --------------------------------------------------------------------------- #
 # Chat input                                                                  #
 # --------------------------------------------------------------------------- #
+#
+# `st.chat_input` is text-only and can't host a file uploader alongside it, so
+# the form below is the cleanest replacement: a multi-file uploader + text
+# input + send button. The text input reads its initial value from
+# `st.session_state["chat_text_input"]`, which the sidebar suggestions populate.
 
-user_input = st.chat_input("Ask anything…") or pending
+with st.form("chat_form", clear_on_submit=True):
+    uploaded = st.file_uploader(
+        "Attach images (optional)",
+        type=["png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True,
+        label_visibility="collapsed",
+        key="chat_files",
+    )
+    text = st.text_input(
+        "Ask anything…",
+        label_visibility="collapsed",
+        key="chat_text_input",
+        placeholder="Ask anything…  (drop images above to attach)",
+    )
+    submitted = st.form_submit_button("Send", use_container_width=True)
 
-if user_input:
-    # Append user message immediately.
-    st.session_state.messages.append(("user", user_input))
+if submitted and (text or uploaded):
+    images = [f.getvalue() for f in uploaded] if uploaded else []
+    payload = {"text": text or "", "images": images}
+    st.session_state.messages.append(("user", payload))
     with st.chat_message("user"):
-        _render_message("user", user_input)
+        _render_message("user", payload)
 
     # Stream the agent.
     use_afc = st.session_state.get("use_afc", False)
@@ -306,7 +346,9 @@ if user_input:
     with st.chat_message("assistant"):
         placeholder = st.empty()
         with st.spinner("Thinking…"):
-            for event in run_agent_stream_dispatch(user_input, use_afc=use_afc):
+            for event in run_agent_stream_dispatch(
+                text or "(image only)", use_afc=use_afc, images=images
+            ):
                 events.append(event)
                 # Re-render the entire trace so far inside the spinner block.
                 html_parts = ['<span class="cal-badge agent">🤖 agent</span>']
