@@ -123,15 +123,7 @@ with st.sidebar:
     ]
     for s in suggestions:
         if st.button(s, key=f"suggest_{hash(s)}", use_container_width=True):
-            # Fire the suggestion directly. Doing this here (instead of stashing
-            # it in session_state and waiting for the form to re-render) is what
-            # fixes the "click suggestion, nothing happens" bug: st.form's
-            # text input doesn't read its initial value back into session_state
-            # until the user interacts with it, so a sidebar click + rerun
-            # never seeds the box. By triggering the agent in the same render
-            # pass as the click, we sidestep that entirely.
             st.session_state.pending_prompt = s
-            st.session_state.autosend = True
             st.rerun()
     st.divider()
     st.checkbox(
@@ -153,9 +145,12 @@ with st.sidebar:
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
-# `pending_prompt` and `autosend` are popped below, where the agent actually
-# runs — leaving them in session_state across reruns so the sidebar button
-# click survives the rerun cycle.
+
+# Handle pending prompt from sidebar — injects into the text input via a
+# session_state key the form reads as its initial value.
+pending = st.session_state.pop("pending_prompt", None)
+if pending is not None:
+    st.session_state["chat_text_input"] = pending
 
 # --------------------------------------------------------------------------- #
 # Header                                                                      #
@@ -313,72 +308,48 @@ for role, content in st.session_state.messages:
         _render_message(role, content)
 
 # --------------------------------------------------------------------------- #
-# Image attachments                                                            #
+# Chat input                                                                  #
 # --------------------------------------------------------------------------- #
 #
-# Streamlit's `st.chat_input` is the only widget that docks to the bottom of
-# the viewport, but it is text-only — it has no companion file uploader. So
-# images are uploaded in a small row ABOVE the chat, and the next prompt
-# picks them up. The row stays out of the way: small, single line, "clear"
-# button to wipe attachments without sending.
+# `st.chat_input` is text-only and can't host a file uploader alongside it, so
+# the form below is the cleanest replacement: a multi-file uploader + text
+# input + send button. The text input reads its initial value from
+# `st.session_state["chat_text_input"]`, which the sidebar suggestions populate.
 
-with st.expander("📎  Attach images (optional)", expanded=False):
-    pending_uploads = st.file_uploader(
-        "Drop one or more PNG / JPEG / WEBP images",
+with st.form("chat_form", clear_on_submit=True):
+    uploaded = st.file_uploader(
+        "Attach images (optional)",
         type=["png", "jpg", "jpeg", "webp"],
         accept_multiple_files=True,
-        key="pending_uploads",
         label_visibility="collapsed",
+        key="chat_files",
     )
-    if pending_uploads:
-        st.caption(f"{len(pending_uploads)} image(s) attached — they'll send with your next message.")
-        if st.button("Clear attachments", use_container_width=True):
-            st.session_state.pending_uploads = []
-            st.rerun()
-
-# --------------------------------------------------------------------------- #
-# Chat input (pinned to the bottom of the viewport by Streamlit)              #
-# --------------------------------------------------------------------------- #
-
-user_text = st.chat_input("Ask anything…")
-
-# Resolve what to send this turn. Three sources, in priority order:
-#   1. The chat_input text box (manual user typing + Enter).
-#   2. A sidebar suggestion click via `st.session_state.pending_prompt`
-#      (set on the previous render and consumed here, with `autosend`
-#      signalling the agent should run without a second Enter press).
-#   3. The pending_uploads list, used only when there's text to wrap them in.
-#
-# Critically, the sidebar path runs the agent in this same render pass (not
-# on a future render). st.form's text input doesn't read its initial value
-# back into session_state until the user interacts with it, so seeding
-# the box via session_state and waiting for the next Enter was the bug.
-
-pending = st.session_state.pop("pending_prompt", None)
-autosend = st.session_state.pop("autosend", False)
-text_to_send = user_text or pending
-if text_to_send or pending_uploads:
-    images = (
-        [f.getvalue() for f in pending_uploads] if pending_uploads else []
+    text = st.text_input(
+        "Ask anything…",
+        label_visibility="collapsed",
+        key="chat_text_input",
+        placeholder="Ask anything…  (drop images above to attach)",
     )
-    payload = {"text": text_to_send or "", "images": images}
+    submitted = st.form_submit_button("Send", use_container_width=True)
+
+if submitted and (text or uploaded):
+    images = [f.getvalue() for f in uploaded] if uploaded else []
+    payload = {"text": text or "", "images": images}
     st.session_state.messages.append(("user", payload))
-    # Render the user turn inside the chat history so it shows up alongside
-    # prior messages after this rerun.
     with st.chat_message("user"):
         _render_message("user", payload)
 
+    # Stream the agent.
     use_afc = st.session_state.get("use_afc", False)
     events: list[dict] = []
     with st.chat_message("assistant"):
         placeholder = st.empty()
         with st.spinner("Thinking…"):
             for event in run_agent_stream_dispatch(
-                text_to_send or "(image only)",
-                use_afc=use_afc,
-                images=images,
+                text or "(image only)", use_afc=use_afc, images=images
             ):
                 events.append(event)
+                # Re-render the entire trace so far inside the spinner block.
                 html_parts = ['<span class="cal-badge agent">🤖 agent</span>']
                 for ev in events:
                     k = ev["type"]
@@ -397,12 +368,3 @@ if text_to_send or pending_uploads:
                 placeholder.markdown("\n".join(html_parts), unsafe_allow_html=True)
 
     st.session_state.messages.append(("assistant", events))
-
-    # Sidebar-suggestion path: clear the attachments for next time and rerun
-    # so the chat_input is rendered empty. (The chat_input clearing is mostly
-    # cosmetic — Streamlit clears it on rerun already, but doing an explicit
-    # rerun also resets the chat_input widget value to empty.)
-    if autosend and pending_uploads:
-        st.session_state.pending_uploads = []
-    if autosend:
-        st.rerun()
