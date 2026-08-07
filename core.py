@@ -453,8 +453,10 @@ def _build_user_content(text: str, images: list[bytes] | None):
 
     Returns a plain string when there are no images (keeps the existing
     fast-path simple and matches what `chats.send_message` already accepts).
-    Returns a single-element list of `types.Content` when images are present
-    so the SDK receives both text and image parts in one request."""
+    Returns a `list[Part]` when images are present — `chats.send_message`
+    takes a list of parts (not a `Content`), and `_is_part_type` recurses
+    into each element of the list. We let the SDK wrap the parts in a
+    `Content` for us."""
     if not images:
         return text
     parts = []
@@ -463,7 +465,7 @@ def _build_user_content(text: str, images: list[bytes] | None):
     for img_bytes in images:
         mime = _detect_mime(img_bytes)
         parts.append(types.Part.from_bytes(data=img_bytes, mime_type=mime))
-    return [types.Content(role="user", parts=parts)]
+    return parts
 
 
 # --------------------------------------------------------------------------- #
