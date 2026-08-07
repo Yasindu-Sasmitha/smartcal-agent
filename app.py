@@ -31,6 +31,44 @@ CUSTOM_CSS = """
   .stApp header { background: transparent; }
   .block-container { padding-top: 2rem; max-width: 820px; }
 
+  /* --- Pin the chat composer to the bottom of the viewport --- */
+  /* Streamlit wraps the st.form in <form data-testid="stForm">. We pin it
+     with !important so Streamlit's own styles never win, and we move it
+     visually below the footer using bottom:-40px so it clears the
+     Streamlit "Made with Streamlit" footer area too. */
+  section.main div[data-testid="stForm"] {
+      position: fixed !important;
+      left: 50% !important;
+      right: auto !important;
+      bottom: 1rem !important;
+      top: auto !important;
+      transform: translateX(-50%);
+      width: min(calc(100% - 2rem), 820px);
+      z-index: 999999;
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 0.75rem;
+      box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.35);
+      padding: 0.75rem 1rem;
+      max-height: 60vh;
+      overflow-y: auto;
+  }
+  /* Strip Streamlit's default form border so it doesn't double up. */
+  section.main div[data-testid="stForm"] > div {
+      border: none !important;
+  }
+  /* Light theme override (Streamlit sets data-theme on <html> or <body>). */
+  [data-theme="light"] section.main div[data-testid="stForm"],
+  html[data-theme="light"] section.main div[data-testid="stForm"] {
+      background: #ffffff;
+      border-color: #e2e8f0;
+  }
+  /* Also raise the chat history's scroll container above the pinned form
+     so the last message is never clipped behind it. */
+  section.main .block-container {
+      padding-bottom: 14rem !important;
+  }
+
   .cal-badge {
       display: inline-block;
       padding: 0.15rem 0.55rem;
